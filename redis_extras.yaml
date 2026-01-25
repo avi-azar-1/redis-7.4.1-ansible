@@ -1,0 +1,61 @@
+- name: add redis extras on RHEL 8
+  hosts: all
+  become: true
+  vars:
+    ansible_install_dir: "{{ playbook_dir }}"
+  tasks:
+    - name: install python 3.11 
+      yum:
+         name: python3.11 
+         state: present
+         disable_gpg_check: yes
+         update_cache: yes
+    - name: install python 3.11 pip
+      yum:
+         name: python3.11-pip
+         state: present
+         disable_gpg_check: yes
+         update_cache: yes
+    - name: install redis-python
+      pip:
+         name: redis-7.1.0-py3-none-any.whl
+         executable: pip3.11
+         chdir: "{{ playbook_dir }}/whls"
+    - name: install prettytable
+      pip:
+         name: prettytable-3.17.0-py3-none-any.whl
+         executable: pip3.11
+         chdir: "{{ playbook_dir }}/whls"
+    - name: create script directory
+      file:
+        path: /redis/scripts
+        state: directory
+        mode: 0755
+        owner: root
+    - name: copy scripts to server
+      copy:
+        src: "{{ item.path }}"
+        dest: /redis/scripts
+        force: no
+        mode: 0755
+      loop:
+        - { path: "{{ playbook_dir }}/scripts/addMemory" }
+        - { path: "{{ playbook_dir }}/scripts/Help" }
+        - { path: "{{ playbook_dir }}/scripts/RedisCommon" }
+        - { path: "{{ playbook_dir }}/scripts/RedisStatus" }
+        - { path: "{{ playbook_dir }}/scripts/addMemory" }
+        - { path: "{{ playbook_dir }}/scripts/RedisUpgrade" }
+        - { path: "{{ playbook_dir }}/scripts/Sys" }
+    - name: add redis tools to bashrc
+      blockinfile:
+        path: /root/.bashrc
+        block: | 
+          PATH=$PATH:$HOME/bin
+          export PATH
+          alias sys='source /redis/scripts/Sys/sys.sh'
+          alias status='python3.11 /redis/scripts/RedisStatus/status.py'
+          alias addmemory='python3.11 /redis/scripts/addMemory/addRedisMemory.py'
+          alias help='/redis/scripts/Help/help.sh'
+        state: present
+
+
