@@ -151,3 +151,6 @@
       loop: "{{ports}}"
       loop_control:
         loop_var: port
+
+- import_playbook: redis_extras.yaml
+
