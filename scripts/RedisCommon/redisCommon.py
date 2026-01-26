@@ -174,7 +174,10 @@ class RedisInstance:
             return RedisMode.MASTER_SLAVE
 
     def getPassword(self, port):
-        return runBash(GET_PASSWORD.format(port)).strip().split()[-1].replace('"', '')
+        result = runBash(GET_PASSWORD.format(port)).strip()
+        if result == '':
+            return ''
+        return result.split()[-1].replace('"', '')
 
     def getInfo(self, port):
         return self.redisConnection(port).info()
