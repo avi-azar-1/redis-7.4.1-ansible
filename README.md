@@ -45,5 +45,6 @@ for remote ssh create id_rsa.pub in ansible server and copy to known_hosts un ta
 redis-cli --cluster create -a <password> --cluster-replicas 1 <redis_list>
 ```
 
+comment: redis extras addes help,sys,status,addmemory,redisupgrade. if any of those dont work due to network without dns change to noDns=True inside /redis/software/RedisCommon/rediscommon.py 
 
 
