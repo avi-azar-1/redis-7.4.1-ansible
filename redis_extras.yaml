@@ -4,35 +4,13 @@
   vars:
     ansible_install_dir: "{{ playbook_dir }}"
   tasks:
-    - name: install python 3.11 
-      yum:
-         name: python3.11 
-         state: present
-         disable_gpg_check: yes
-         update_cache: yes
-    - name: install python 3.11 pip
-      yum:
-         name: python3.11-pip
-         state: present
-         disable_gpg_check: yes
-         update_cache: yes
-    - name: install redis-python
-      pip:
-         name: redis-7.1.0-py3-none-any.whl
-         executable: pip3.11
-         chdir: "{{ playbook_dir }}/whls"
-    - name: install prettytable
-      pip:
-         name: prettytable-3.17.0-py3-none-any.whl
-         executable: pip3.11
-         chdir: "{{ playbook_dir }}/whls"
     - name: create script directory
       file:
         path: /redis/scripts
         state: directory
         mode: 0755
         owner: root
-    - name: copy scripts to server
+    - name: copy scripts,whls,rpms to server
       copy:
         src: "{{ item.path }}"
         dest: /redis/scripts
@@ -46,6 +24,25 @@
         - { path: "{{ playbook_dir }}/scripts/addMemory" }
         - { path: "{{ playbook_dir }}/scripts/RedisUpgrade" }
         - { path: "{{ playbook_dir }}/scripts/Sys" }
+        - { path: "{{ playbook_dir }}/scripts/whls" }
+        - { path: "{{ playbook_dir }}/scripts/rpms" }
+    - name: install python 3.11 
+      shell: yum install /redis/scripts/rpms/*.rpm --disablerepo="*" -y
+    - name: install redis-python
+      pip:
+         name: redis-7.1.0-py3-none-any.whl
+         executable: pip3.11
+         chdir: /redis/scripts/whls      
+    - name: install wcwidth
+      pip:
+         name: wcwidth-0.3.5-py3-none-any.whl
+         executable: pip3.11
+         chdir: /redis/scripts/whls 
+    - name: install prettytable
+      pip:
+         name: prettytable-3.17.0-py3-none-any.whl
+         executable: pip3.11
+         chdir: /redis/scripts/whls 
     - name: add redis tools to bashrc
       blockinfile:
         path: /root/.bashrc
@@ -57,5 +54,6 @@
           alias addmemory='python3.11 /redis/scripts/addMemory/addRedisMemory.py'
           alias help='/redis/scripts/Help/help.sh'
         state: present
+
 
 
