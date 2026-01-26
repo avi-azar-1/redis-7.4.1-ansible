@@ -24,8 +24,8 @@
         - { path: "{{ playbook_dir }}/scripts/addMemory" }
         - { path: "{{ playbook_dir }}/scripts/RedisUpgrade" }
         - { path: "{{ playbook_dir }}/scripts/Sys" }
-        - { path: "{{ playbook_dir }}/scripts/whls" }
-        - { path: "{{ playbook_dir }}/scripts/rpms" }
+        - { path: "{{ playbook_dir }}/whls" }
+        - { path: "{{ playbook_dir }}/rpms" }
     - name: install python 3.11 
       shell: yum install /redis/scripts/rpms/*.rpm --disablerepo="*" -y
     - name: install redis-python
@@ -54,6 +54,7 @@
           alias addmemory='python3.11 /redis/scripts/addMemory/addRedisMemory.py'
           alias help='/redis/scripts/Help/help.sh'
         state: present
+
 
 
 
