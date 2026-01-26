@@ -17,9 +17,12 @@ REDIS_SERVICE = 'redis_{}'
 SENTINEL_PORT = 26379
 POLL_WAIT_SEC = 0.1
 POLL_PRINT_FREQUANCY = 100
+noDns = False
 
 
 def ip_to_hostname(ip):
+    if noDns:
+        return ip
     try:
         return socket.gethostbyaddr(ip)[0].split('.')[0]
     except:
