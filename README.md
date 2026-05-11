@@ -7,6 +7,7 @@ generic install for redis 7.4 instance on rhel 8 servers, including software unp
 1. **downloads**:  
 - download latest redis 7.4 from:  
 https://github.com/redis-stack/redis-stack/releases
+https://redis.io/downloads/
 - also download this repo  
 - also download ansible rhel 8 install from:  
 https://github.com/avi-azar-1/rhel8.8-ansible
