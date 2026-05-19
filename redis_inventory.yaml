@@ -1,5 +1,5 @@
 [all:vars]
-playbook_dir=/...somepath.../redis-7.4.1-ansible-main
-software_dir=/...somepath.../redis-stack-server-7.4.0-v6
+playbook_dir=/...somepath.../redis-8-ansible-main
+software_dir=/...somepath.../redis-x.x.x
 [redis_servers]
 localhost ports=[33333] memory=500MB replicaof= cluster=no rdb=no appendonly=no stack=yes password=
