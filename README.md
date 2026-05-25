@@ -48,7 +48,7 @@ from playbook folder:
 ansible-playbook -i redis_inventory.yaml redis8.yaml
 ```
 for local install (without ssh) run with '-c local' flag  
-for remote ssh create id_rsa.pub in ansible server and copy to known_hosts un target server  
+for remote ssh create id_rsa.pub in ansible server and copy to known_hosts in target server  
 
 6. **replication, sentinels or cluster**:  
    **sentinels**: set up as normal redis then change to sentinel.conf file  
