@@ -18,6 +18,10 @@ https://github.com/mishamosher/CentOS-WSL/releases/tag/9-stream-20230626
 ```bash
 ./get_latest_redis.sh
 ```
+  or for centos9/rhel9 run:
+  ```bash
+./get_latest_redis_rhel9.sh
+```
 the script will configure the server, download redis and package the software into redis-x.x.x.tar.gz
 
 2. **install ansible**:  
