@@ -11,6 +11,7 @@ https://github.com/avi-azar-1/rhel8.8-ansible
 
 - install centos8 for rhel 8 equivelent environment:
 https://github.com/mishamosher/CentOS-WSL/releases/tag/8-stream-20230626
+
 or centos9 for rhel 9 equivelent environment:
 https://github.com/mishamosher/CentOS-WSL/releases/tag/9-stream-20230626
 - after the install copy and run inside the centos8 env:
