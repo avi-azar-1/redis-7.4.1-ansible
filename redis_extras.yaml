@@ -1,4 +1,4 @@
-- name: add redis extras on RHEL 8
+- name: add redis extras on RHEL 8/9
   hosts: all
   become: true
   vars:

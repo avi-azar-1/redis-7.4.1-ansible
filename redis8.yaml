@@ -1,4 +1,4 @@
-- name: Install Redis 8.x on RHEL 8
+- name: Install Redis 8.x on RHEL 8/9
   hosts: all
   become: true
   vars:
@@ -48,8 +48,8 @@
         - "memory already allocated in config: {{ preused_mem.stdout|trim }}"
     - name: memory check
       assert:
-        that: "{{ preused_mem.stdout|trim|human_to_bytes + (ports|length * memory|human_to_bytes) }}
-         <= {{ ansible_memtotal_mb*1024.0*1024.0*0.8 }}"
+        that: " preused_mem.stdout|trim|human_to_bytes + (ports|length * memory|human_to_bytes) 
+         <=  ansible_memtotal_mb*1024.0*1024.0*0.8 "
         fail_msg:
          - "wanted memory usage is more than 80% of server ram"
          - "please add memory or use other server"
