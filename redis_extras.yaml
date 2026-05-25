@@ -26,8 +26,15 @@
         - { path: "{{ playbook_dir }}/scripts/Sys" }
         - { path: "{{ playbook_dir }}/whls" }
         - { path: "{{ playbook_dir }}/rpms" }
+        - { path: "{{ playbook_dir }}/rpms_rhel9" }
     - name: install python 3.11 
       shell: yum install /redis/scripts/rpms/*.rpm --disablerepo="*" -y
+      when: 
+        - ansible_facts['distribution_major_version'] == '8'
+    - name: install python 3.11 rhel9
+      shell: yum install /redis/scripts/rpms_rhel9/*.rpm --disablerepo="*" -y
+      when: 
+        - ansible_facts['distribution_major_version'] == '9'
     - name: install redis-python
       pip:
          name: redis-7.1.0-py3-none-any.whl
