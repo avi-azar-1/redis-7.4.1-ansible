@@ -22,7 +22,7 @@ run_list = []
 
 SORT_SIMILARITY = 0.3  # see difflib cutoff parameter
 BYTES_TO_GB = 1024 * 1024 * 1024
-CURRENT_VERSION = '7.4.6'
+CURRENT_VERSION = '8.6.3'
 
 
 def printLogo():
