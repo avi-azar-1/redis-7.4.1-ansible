@@ -21,6 +21,7 @@ APPLICATION_RECONNECT_TIME = 10
 RELOAD_SERVICE = 'systemctl daemon-reload'
 SERVICE_LOCATION = '/usr/lib/systemd/system/{}.service'
 SED_REPLACE = 'sed -i \'s/{}/{}/g\' {}'
+REDIS_CONF_PATH = '/etc/redis/{}.conf'
 
 
 class UpgradeError(Exception):
@@ -255,6 +256,32 @@ def slaveUsageInfo(instance):
         print(' '.join(unusedSlaves))
 
 
+def disableRedisGears(port):
+    """Comment out any loadmodule line for redisgears in the Redis conf file."""
+    conf_path = Path(REDIS_CONF_PATH.format(port))
+    if not conf_path.exists():
+        print(f'WARNING: conf file {conf_path} not found for port {port}, skipping gears check')
+        return
+
+    lines = conf_path.read_text().splitlines(True)
+    modified = False
+    new_lines = []
+    for line in lines:
+        stripped = line.lstrip()
+        if stripped.lower().startswith('loadmodule') and 'redisgears' in stripped.lower():
+            if not stripped.startswith('#'):
+                new_lines.append('# ' + line if not line.startswith(' ') else '#' + line)
+                modified = True
+                continue
+        new_lines.append(line)
+
+    if modified:
+        conf_path.write_text(''.join(new_lines))
+        print(f'{port}: commented out redisgears loadmodule in {conf_path}')
+    else:
+        print(f'{port}: no active redisgears loadmodule found in {conf_path}')
+
+
 def renameRedisService(port, current_version, new_version):
     service = common.REDIS_SERVICE.format(port)
     service_path = SERVICE_LOCATION.format(service)
@@ -344,7 +371,12 @@ def main():
         print("\ndry run ends here, exiting...")
         sys.exit(0)
 
-    print("\n-- part 4: stop all redises and rename services to new version --")
+    print("\n-- part 4: disable deprecated redisgears module in conf files --")
+
+    for port in instance.ports:
+        disableRedisGears(port)
+
+    print("\n-- part 5: stop all redises and rename services to new version --")
 
     instance.stopRedisMulti(instance.ports)
 
@@ -352,15 +384,15 @@ def main():
         renameRedisService(port, current_version, new_version)
         print(f'{instance.hostname}:{port} stopped, service renamed')
 
-    print("\n-- part 5: create copy of redis old and new software in /redis/software --")
+    print("\n-- part 6: create copy of redis old and new software in /redis/software --")
 
     backupRedisBinaries(path, current_version, new_version)
 
-    print("\n-- part 6: switch new redis software instead of old software (upgrade step) --")
+    print("\n-- part 7: switch new redis software instead of old software (upgrade step) --")
 
     switchRedisBinaries(path)
 
-    print("\n-- part 7: start redis back up and check validity --")
+    print("\n-- part 8: start redis back up and check validity --")
 
     instance.startRedisMulti(instance.ports)
     portsBackUp = instance.gatherPortsList()
