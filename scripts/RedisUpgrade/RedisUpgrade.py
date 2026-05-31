@@ -22,6 +22,10 @@ RELOAD_SERVICE = 'systemctl daemon-reload'
 SERVICE_LOCATION = '/usr/lib/systemd/system/{}.service'
 SED_REPLACE = 'sed -i \'s/{}/{}/g\' {}'
 REDIS_CONF_PATH = '/etc/redis/{}.conf'
+CLIENT_PAUSE_TIMEOUT_MS = 30000
+REPL_SYNC_TIMEOUT_SEC = 25
+ROLE_CHANGE_TIMEOUT_SEC = 30
+REPL_LAG_WARN_BYTES = 1024 * 1024  # 1MB
 
 
 class UpgradeError(Exception):
@@ -204,6 +208,59 @@ def getActiveConnections(instance, port):
     return activeConnection
 
 
+def checkReplicationLag(instance, port):
+    """Check replication lag on a master port. Returns max lag in bytes across all slaves."""
+    info = instance.getInfo(port)
+    if info['role'] != 'master' or info['connected_slaves'] == 0:
+        return 0
+
+    master_offset = info['master_repl_offset']
+    max_lag = 0
+    for i in range(info['connected_slaves']):
+        slave_key = f'slave{i}'
+        if slave_key in info:
+            slave_offset = int(info[slave_key]['offset'])
+            lag = master_offset - slave_offset
+            max_lag = max(max_lag, lag)
+            state = info[slave_key]['state']
+            print(f'  slave{i} ({info[slave_key]["ip"]}:{info[slave_key]["port"]}): '
+                  f'lag={lag} bytes, state={state}')
+    return max_lag
+
+
+def waitForReplicationSync(instance, port, timeout_sec=REPL_SYNC_TIMEOUT_SEC):
+    """Poll until all slaves have caught up to the master's replication offset."""
+    start = time.time()
+    while time.time() - start < timeout_sec:
+        info = instance.getInfo(port)
+        master_offset = info['master_repl_offset']
+        all_synced = True
+        for i in range(info['connected_slaves']):
+            slave_key = f'slave{i}'
+            if slave_key in info:
+                if int(info[slave_key]['offset']) < master_offset:
+                    all_synced = False
+                    break
+        if all_synced:
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def waitForRoleChange(instance, port, expected_role, timeout_sec=ROLE_CHANGE_TIMEOUT_SEC):
+    """Poll until the instance's role for the given port matches expected_role."""
+    start = time.time()
+    while time.time() - start < timeout_sec:
+        try:
+            info = instance.getInfo(port)
+            if info['role'] == expected_role:
+                return True
+        except Exception:
+            pass  # connection may reset during failover
+        time.sleep(0.5)
+    return False
+
+
 def handleMasterFailovers(instance):
     masters = []
     standalones = []
@@ -220,19 +277,72 @@ def handleMasterFailovers(instance):
     if len(masters) == 0:
         print("all redises on server are already slaves (or standalone), continuing")
     else:
-        print("the following masters with active slaves will failover to other server:")
+        # pre-failover replication lag check
+        print("checking replication lag on masters...")
+        for port in masters:
+            print(f'{instance.hostname}:{port}:')
+            lag = checkReplicationLag(instance, port)
+            if lag > REPL_LAG_WARN_BYTES:
+                print(f'WARNING: replication lag is {lag} bytes (>{REPL_LAG_WARN_BYTES})')
+                print('high replication lag increases risk of data loss during failover')
+                confirmProceed()
+
+        print("\nthe following masters with active slaves will failover to other server:")
         print(' '.join(masters))
         confirmProceed()
 
         for port in masters:
+            rds = instance.redisConnection(port)
+
+            # pause client writes on master so no new data comes in
+            print(f'{instance.hostname}:{port}: pausing client writes...')
+            try:
+                rds.execute_command(f'CLIENT PAUSE {CLIENT_PAUSE_TIMEOUT_MS} WRITE')
+            except Exception as e:
+                print(f'WARNING: CLIENT PAUSE not supported ({e}), proceeding without pause')
+
+            # wait for all replicas to catch up to the frozen master offset
+            print(f'{instance.hostname}:{port}: waiting for replica sync...')
+            synced = waitForReplicationSync(instance, port)
+            if not synced:
+                try:
+                    rds.execute_command('CLIENT UNPAUSE')
+                except Exception:
+                    pass
+                raise UpgradeError(
+                    f'replica sync timed out for {instance.hostname}:{port} '
+                    f'after {REPL_SYNC_TIMEOUT_SEC}s')
+            print(f'{instance.hostname}:{port}: replicas fully synced')
+
+            # trigger failover
             result = str(instance.failoverRedis(port))
-            print(f'{instance.hostname}:{port} returned: {result}')
+            print(f'{instance.hostname}:{port}: failover returned: {result}')
             if result not in ('ok', 'True', True):
+                try:
+                    rds.execute_command('CLIENT UNPAUSE')
+                except Exception:
+                    pass
                 raise UpgradeError(
                     f'failover failed for {instance.hostname}:{port} — returned: {result}')
 
-        print(f"waiting {APPLICATION_RECONNECT_TIME} seconds for reconnect...")
+            # verify role actually changed
+            print(f'{instance.hostname}:{port}: waiting for role change to slave...')
+            changed = waitForRoleChange(instance, port, 'slave')
+            if changed:
+                print(f'{instance.hostname}:{port}: confirmed role is now slave')
+            else:
+                print(f'WARNING: {instance.hostname}:{port}: role change not confirmed '
+                      f'after {ROLE_CHANGE_TIMEOUT_SEC}s, proceeding anyway')
+
+            # unpause clients on old master (now slave)
+            try:
+                rds.execute_command('CLIENT UNPAUSE')
+            except Exception:
+                pass  # connection may have been reset during failover
+
+        print(f"waiting {APPLICATION_RECONNECT_TIME} seconds for client reconnection...")
         time.sleep(APPLICATION_RECONNECT_TIME)
+        print("all failovers completed successfully")
 
 
 def slaveUsageInfo(instance):
