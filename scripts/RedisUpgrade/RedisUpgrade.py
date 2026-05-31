@@ -2,6 +2,7 @@ import argparse
 import time
 import sys
 import shutil
+import re
 from pathlib import Path
 upperDirPath = Path(__file__).resolve().parent.parent
 sys.path.append(str(upperDirPath))
@@ -20,7 +21,6 @@ IGNORED_COMMANDS = ('ping', 'info', 'client|list',
 APPLICATION_RECONNECT_TIME = 10
 RELOAD_SERVICE = 'systemctl daemon-reload'
 SERVICE_LOCATION = '/usr/lib/systemd/system/{}.service'
-SED_REPLACE = 'sed -i \'s/{}/{}/g\' {}'
 REDIS_CONF_PATH = '/etc/redis/{}.conf'
 CLIENT_PAUSE_TIMEOUT_MS = 30000
 REPL_SYNC_TIMEOUT_SEC = 25
@@ -394,9 +394,22 @@ def disableRedisGears(port):
 
 def renameRedisService(port, current_version, new_version):
     service = common.REDIS_SERVICE.format(port)
-    service_path = SERVICE_LOCATION.format(service)
-    common.runBash(SED_REPLACE.format(
-        current_version, new_version, service_path))
+    service_path = Path(SERVICE_LOCATION.format(service))
+
+    if not service_path.exists():
+        print(f"WARNING: service file {service_path} does not exist, skipping rename")
+        return
+
+    content = service_path.read_text()
+
+    # Replace explicit occurrences of current_version with new_version
+    content = content.replace(current_version, new_version)
+
+    # Ensure Description is updated correctly regardless of previous value
+    content = re.sub(r'^Description=Redis.*$', f'Description=Redis {new_version}', content, flags=re.MULTILINE)
+
+    service_path.write_text(content)
+
     common.runBash(RELOAD_SERVICE)
 
 
