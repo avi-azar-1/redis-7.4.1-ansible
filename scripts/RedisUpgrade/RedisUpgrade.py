@@ -14,6 +14,7 @@ REDIS_SOFTWARE_DIR = '/redis/software'
 RUNNING_BINARIES_PATH = '/usr/local/sbin'
 RUNNING_LIBRARIES_PATH = '/usr/local/lib'
 REQUIRED_BINARIES = ['redis-cli', 'redis-sentinel', 'redis-server']
+EXTRA_BINARIES = ['redis-check-aof','redis-check-rdb','redis-benchmark']
 CHECK_VERSION = '{} --version; echo $?'
 IDLE_WINDOW = 60
 IGNORED_COMMANDS = ('ping', 'info', 'client|list',
@@ -113,28 +114,62 @@ def compareVersions(current_version, new_version):
         confirmProceed()
 
 
+def _copyRedisFiles(srcDir, destDir):
+    """Copy individual files and symlinks from srcDir to destDir, skipping subdirectories.
+    Uses unlink-then-copy to avoid 'Text file busy' errors on running binaries."""
+    destDir.mkdir(mode=0o755, parents=True, exist_ok=True)
+    copied = []
+    for item in srcDir.iterdir():
+        dest = destDir / item.name
+        if item.is_symlink():
+            if dest.exists() or dest.is_symlink():
+                dest.unlink()
+            dest.symlink_to(item.readlink())
+            copied.append(item.name)
+        elif item.is_file():
+            if dest.exists():
+                dest.unlink()
+            shutil.copy2(item, dest)
+            copied.append(item.name)
+    return copied
+
+
 def backupRedisBinaries(path, current_version, new_version):
     backupDir = Path(REDIS_SOFTWARE_DIR)
     newSoftwarePath = Path(path).resolve()
     runningSoftwarePath = Path(RUNNING_BINARIES_PATH)
     runningLibsPath = Path(RUNNING_LIBRARIES_PATH)
 
-    # copy new software to new version folder
-    (backupDir / new_version).mkdir(mode=0o755, parents=True, exist_ok=True)
-    shutil.copytree(newSoftwarePath, backupDir /
-                    new_version, dirs_exist_ok=True)
-    print(f'copied new redis software to {backupDir / new_version}')
+    # backup current redis binaries (required + extra, skip non-redis like redis-exporter)
+    currentBinBackup = backupDir / current_version / BINARIES_DIR
+    currentBinBackup.mkdir(mode=0o755, parents=True, exist_ok=True)
+    for binary in REQUIRED_BINARIES + EXTRA_BINARIES:
+        src = runningSoftwarePath / binary
+        if src.exists():
+            shutil.copy2(src, currentBinBackup / binary)
+            print(f'  backed up {src} -> {currentBinBackup / binary}')
 
-    # copy existing software to current version folder
-    (backupDir / current_version /
-     BINARIES_DIR).mkdir(mode=0o755, parents=True, exist_ok=True)
-    shutil.copytree(runningSoftwarePath, backupDir /
-                    current_version / BINARIES_DIR, dirs_exist_ok=True)
-    (backupDir / current_version /
-     LIBRARIES_DIR).mkdir(mode=0o755, parents=True, exist_ok=True)
-    shutil.copytree(runningLibsPath, backupDir /
-                    current_version / LIBRARIES_DIR, dirs_exist_ok=True)
-    print(f'copied current redis software to {backupDir / current_version}')
+    # backup current redis libraries (only files matching new software's lib contents)
+    currentLibBackup = backupDir / current_version / LIBRARIES_DIR
+    currentLibBackup.mkdir(mode=0o755, parents=True, exist_ok=True)
+    newLibDir = newSoftwarePath / LIBRARIES_DIR
+    for item in newLibDir.iterdir():
+        currentLib = runningLibsPath / item.name
+        if currentLib.exists() or currentLib.is_symlink():
+            dest = currentLibBackup / item.name
+            if currentLib.is_symlink():
+                if dest.exists() or dest.is_symlink():
+                    dest.unlink()
+                dest.symlink_to(currentLib.readlink())
+            else:
+                shutil.copy2(currentLib, dest)
+    print(f'backed up current redis libraries to {currentLibBackup}')
+
+    # save new software to new version folder
+    newBackup = backupDir / new_version
+    newBackup.mkdir(mode=0o755, parents=True, exist_ok=True)
+    shutil.copytree(newSoftwarePath, newBackup, dirs_exist_ok=True)
+    print(f'copied new redis software to {newBackup}')
 
 
 def switchRedisBinaries(path):
@@ -142,17 +177,19 @@ def switchRedisBinaries(path):
     runningSoftwarePath = Path(RUNNING_BINARIES_PATH)
     runningLibsPath = Path(RUNNING_LIBRARIES_PATH)
 
-    # copy new software to running folders
-    shutil.copytree(newSoftwarePath / BINARIES_DIR,
-                    runningSoftwarePath, dirs_exist_ok=True)
-    shutil.copytree(newSoftwarePath / LIBRARIES_DIR,
-                    runningLibsPath, dirs_exist_ok=True)
-    print(
-        f'switched new redis software into {runningSoftwarePath} and {runningLibsPath}')
+    # copy only redis binaries from new software
+    newBinDir = newSoftwarePath / BINARIES_DIR
+    binFiles = _copyRedisFiles(newBinDir, runningSoftwarePath)
+    print(f'switched binaries into {runningSoftwarePath}: {", ".join(binFiles)}')
+
+    # copy only redis libraries from new software
+    newLibDir = newSoftwarePath / LIBRARIES_DIR
+    libFiles = _copyRedisFiles(newLibDir, runningLibsPath)
+    print(f'switched libraries into {runningLibsPath}: {", ".join(libFiles)}')
 
 
 def rollbackRedisBinaries(version):
-    """Rollback to a previously backed-up version from /redis/software/<version>."""
+    """Rollback Redis binaries and libraries from /redis/software/<version>/."""
     backupDir = Path(REDIS_SOFTWARE_DIR) / version
     if not backupDir.exists():
         raise ValidationError(
@@ -167,12 +204,15 @@ def rollbackRedisBinaries(version):
     runningSoftwarePath = Path(RUNNING_BINARIES_PATH)
     runningLibsPath = Path(RUNNING_LIBRARIES_PATH)
 
-    shutil.copytree(backupDir / BINARIES_DIR,
-                    runningSoftwarePath, dirs_exist_ok=True)
-    shutil.copytree(backupDir / LIBRARIES_DIR,
-                    runningLibsPath, dirs_exist_ok=True)
-    print(
-        f'rolled back redis software from {backupDir} into {runningSoftwarePath} and {runningLibsPath}')
+    # restore only backed-up redis binaries
+    binDir = backupDir / BINARIES_DIR
+    binFiles = _copyRedisFiles(binDir, runningSoftwarePath)
+    print(f'restored binaries into {runningSoftwarePath}: {", ".join(binFiles)}')
+
+    # restore only backed-up redis libraries
+    libDir = backupDir / LIBRARIES_DIR
+    libFiles = _copyRedisFiles(libDir, runningLibsPath)
+    print(f'restored libraries into {runningLibsPath}: {", ".join(libFiles)}')
 
 
 def printStaticInfo(current_version, new_version, mode, dryRun):
