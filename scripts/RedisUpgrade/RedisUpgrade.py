@@ -296,10 +296,12 @@ def handleMasterFailovers(instance):
 
             # pause client writes on master so no new data comes in
             print(f'{instance.hostname}:{port}: pausing client writes...')
+            pause_start = time.time()
             try:
                 rds.execute_command(f'CLIENT PAUSE {CLIENT_PAUSE_TIMEOUT_MS} WRITE')
             except Exception as e:
                 print(f'WARNING: CLIENT PAUSE not supported ({e}), proceeding without pause')
+                pause_start = None
 
             # wait for all replicas to catch up to the frozen master offset
             print(f'{instance.hostname}:{port}: waiting for replica sync...')
@@ -334,11 +336,38 @@ def handleMasterFailovers(instance):
                 print(f'WARNING: {instance.hostname}:{port}: role change not confirmed '
                       f'after {ROLE_CHANGE_TIMEOUT_SEC}s, proceeding anyway')
 
+            # verify slave is connected to the new master
+            try:
+                info = instance.getInfo(port)
+                link_status = info.get('master_link_status', 'unknown')
+                master_host = info.get('master_host', 'unknown')
+                master_port = info.get('master_port', 'unknown')
+                if link_status == 'up':
+                    print(f'{instance.hostname}:{port}: slave link to new master '
+                          f'{master_host}:{master_port} is up')
+                else:
+                    print(f'WARNING: {instance.hostname}:{port}: slave link status is '
+                          f'\'{link_status}\' (master: {master_host}:{master_port})')
+            except Exception:
+                pass
+
+            # brief delay for sentinel +switch-master propagation
+            # allows python sentinel clients to update their pool address
+            # before we unpause and they receive ReadOnlyError
+            time.sleep(2)
+
             # unpause clients on old master (now slave)
+            # held writes will receive ReadOnlyError, prompting clients to reconnect
+            # to the new master via sentinel-resolved address
             try:
                 rds.execute_command('CLIENT UNPAUSE')
             except Exception:
                 pass  # connection may have been reset during failover
+
+            if pause_start:
+                pause_duration = time.time() - pause_start
+                print(f'{instance.hostname}:{port}: clients were paused for '
+                      f'{pause_duration:.1f}s (writes held server-side)')
 
         print(f"waiting {APPLICATION_RECONNECT_TIME} seconds for client reconnection...")
         time.sleep(APPLICATION_RECONNECT_TIME)
