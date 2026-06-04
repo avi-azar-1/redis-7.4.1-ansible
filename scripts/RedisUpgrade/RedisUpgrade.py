@@ -28,7 +28,7 @@ REPL_SYNC_TIMEOUT_SEC = 25
 ROLE_CHANGE_TIMEOUT_SEC = 30
 REPL_LAG_WARN_BYTES = 1024 * 1024  # 1MB
 MONITOR_DURATION_SEC = 5
-MONITOR_IGNORED_COMMANDS = {'ping', 'replconf', 'publish'}
+MONITOR_IGNORED_COMMANDS = {'ping', 'replconf', 'publish', 'info'}
 
 
 class UpgradeError(Exception):
@@ -438,8 +438,9 @@ def slaveUsageInfo(instance):
 
 def monitorReplicaTraffic(instance):
     """Run MONITOR on each slave for MONITOR_DURATION_SEC and warn about
-    applicative (non-replication, non-sentinel) traffic."""
+    applicative (non-replication, non-sentinel) traffic. Runs checks in parallel."""
     import redis as redispy
+    import concurrent.futures
 
     # collect sentinel IPs to exclude
     sentinel_ips = set()
@@ -450,17 +451,17 @@ def monitorReplicaTraffic(instance):
             except Exception:
                 pass
 
-    for port in instance.ports:
-        if not instance.isSlave(port):
-            continue
+    slave_ports = [port for port in instance.ports if instance.isSlave(port)]
+    if not slave_ports:
+        return
 
+    print(f'monitoring traffic for {MONITOR_DURATION_SEC}s on {len(slave_ports)} slaves...')
+
+    def _monitor_worker(port):
         # get master IP for this slave to exclude replication traffic
         info = instance.getInfo(port)
         master_ip = info.get('master_host', '')
-
         excluded_ips = sentinel_ips | {master_ip, '127.0.0.1', instance.ip}
-
-        print(f'{instance.hostname}:{port}: monitoring traffic for {MONITOR_DURATION_SEC}s...')
 
         # dedicated connection with socket_timeout so listen() doesn't block forever
         passwrd = instance.getPassword(port)
@@ -497,20 +498,29 @@ def monitorReplicaTraffic(instance):
                     except redispy.TimeoutError:
                         continue  # socket timed out, check elapsed time
         except Exception as e:
-            print(f'WARNING: could not run MONITOR on {port}: {e}')
-            continue
+            return port, f'WARNING: could not run MONITOR on {port}: {e}', None
         finally:
             try:
                 rds.close()
             except Exception:
                 pass
 
-        if applicative_traffic:
-            print(f'WARNING: slave {instance.hostname}:{port} has applicative traffic:')
-            for ip, cmds in applicative_traffic.items():
-                print(f'  {ip}: {", ".join(sorted(cmds))}')
-        else:
-            print(f'{instance.hostname}:{port}: no applicative traffic detected')
+        return port, None, applicative_traffic
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(slave_ports)) as executor:
+        futures = {executor.submit(_monitor_worker, port): port for port in slave_ports}
+        for future in concurrent.futures.as_completed(futures):
+            port = futures[future]
+            try:
+                p, err, traffic = future.result()
+                if err:
+                    print(err)
+                elif traffic:
+                    print(f'WARNING: slave {instance.hostname}:{port} has applicative traffic:')
+                    for ip, cmds in traffic.items():
+                        print(f'  {ip}: {", ".join(sorted(cmds))}')
+            except Exception as e:
+                print(f'WARNING: exception monitoring {port}: {e}')
 
 
 def disableRedisGears(port):
