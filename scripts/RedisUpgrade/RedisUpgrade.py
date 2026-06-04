@@ -436,10 +436,11 @@ def slaveUsageInfo(instance):
         print('the following slaves are unused and can be restarted safely:')
         print(' '.join(unusedSlaves))
 
-
 def monitorReplicaTraffic(instance):
     """Run MONITOR on each slave for MONITOR_DURATION_SEC and warn about
     applicative (non-replication, non-sentinel) traffic."""
+    import redis as redispy
+
     # collect sentinel IPs to exclude
     sentinel_ips = set()
     if instance.mode == common.RedisMode.MASTER_SLAVE:
@@ -460,33 +461,41 @@ def monitorReplicaTraffic(instance):
         excluded_ips = sentinel_ips | {master_ip, '127.0.0.1', instance.ip}
 
         print(f'{instance.hostname}:{port}: monitoring traffic for {MONITOR_DURATION_SEC}s...')
-        rds = instance.redisConnection(port)
+
+        # dedicated connection with socket_timeout so listen() doesn't block forever
+        passwrd = instance.getPassword(port)
+        rds = redispy.Redis(host=instance.hostname, port=int(port),
+                            password=passwrd, socket_timeout=1)
         applicative_traffic = {}  # ip -> set of commands
 
         try:
-            monitor = rds.monitor()
-            start = time.time()
-            for event in monitor.listen():
-                if time.time() - start >= MONITOR_DURATION_SEC:
-                    break
+            with rds.monitor() as monitor:
+                start = time.time()
+                while time.time() - start < MONITOR_DURATION_SEC:
+                    try:
+                        for event in monitor.listen():
+                            if time.time() - start >= MONITOR_DURATION_SEC:
+                                break
 
-                command = event.get('command', '')
-                client_address = event.get('client_address', '')
+                            command = event.get('command', '')
+                            client_address = event.get('client_address', '')
 
-                if not client_address or not command:
-                    continue
+                            if not client_address or not command:
+                                continue
 
-                cmd_name = command.split()[0].lower() if command else ''
-                if cmd_name in MONITOR_IGNORED_COMMANDS:
-                    continue
+                            cmd_name = command.split()[0].lower() if command else ''
+                            if cmd_name in MONITOR_IGNORED_COMMANDS:
+                                continue
 
-                client_ip = client_address.split(':')[0]
-                if client_ip in excluded_ips:
-                    continue
+                            client_ip = client_address.split(':')[0]
+                            if client_ip in excluded_ips:
+                                continue
 
-                if client_ip not in applicative_traffic:
-                    applicative_traffic[client_ip] = set()
-                applicative_traffic[client_ip].add(cmd_name)
+                            if client_ip not in applicative_traffic:
+                                applicative_traffic[client_ip] = set()
+                            applicative_traffic[client_ip].add(cmd_name)
+                    except redispy.TimeoutError:
+                        continue  # socket timed out, check elapsed time
         except Exception as e:
             print(f'WARNING: could not run MONITOR on {port}: {e}')
             continue
@@ -499,7 +508,7 @@ def monitorReplicaTraffic(instance):
         if applicative_traffic:
             print(f'WARNING: slave {instance.hostname}:{port} has applicative traffic:')
             for ip, cmds in applicative_traffic.items():
-                print(f'  {ip}: {{", ".join(sorted(cmds))}}')
+                print(f'  {ip}: {", ".join(sorted(cmds))}')
         else:
             print(f'{instance.hostname}:{port}: no applicative traffic detected')
 
