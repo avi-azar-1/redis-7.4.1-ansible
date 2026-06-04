@@ -518,7 +518,9 @@ def monitorReplicaTraffic(instance):
                 elif traffic:
                     print(f'WARNING: slave {instance.hostname}:{port} has applicative traffic:')
                     for ip, cmds in traffic.items():
-                        print(f'  {ip}: {", ".join(sorted(cmds))}')
+                        host = common.ip_to_hostname(ip)
+                        display = f'{host} ({ip})' if host != ip else ip
+                        print(f'  {display}: {", ".join(sorted(cmds))}')
             except Exception as e:
                 print(f'WARNING: exception monitoring {port}: {e}')
 
