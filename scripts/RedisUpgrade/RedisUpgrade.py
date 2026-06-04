@@ -27,6 +27,8 @@ CLIENT_PAUSE_TIMEOUT_MS = 30000
 REPL_SYNC_TIMEOUT_SEC = 25
 ROLE_CHANGE_TIMEOUT_SEC = 30
 REPL_LAG_WARN_BYTES = 1024 * 1024  # 1MB
+MONITOR_DURATION_SEC = 5
+MONITOR_IGNORED_COMMANDS = {'ping', 'replconf', 'publish'}
 
 
 class UpgradeError(Exception):
@@ -435,6 +437,73 @@ def slaveUsageInfo(instance):
         print(' '.join(unusedSlaves))
 
 
+def monitorReplicaTraffic(instance):
+    """Run MONITOR on each slave for MONITOR_DURATION_SEC and warn about
+    applicative (non-replication, non-sentinel) traffic."""
+    # collect sentinel IPs to exclude
+    sentinel_ips = set()
+    if instance.mode == common.RedisMode.MASTER_SLAVE:
+        for s in instance.sentinels:
+            try:
+                sentinel_ips.add(common.runBash(f'getent hosts {s}').split()[0])
+            except Exception:
+                pass
+
+    for port in instance.ports:
+        if not instance.isSlave(port):
+            continue
+
+        # get master IP for this slave to exclude replication traffic
+        info = instance.getInfo(port)
+        master_ip = info.get('master_host', '')
+
+        excluded_ips = sentinel_ips | {master_ip, '127.0.0.1', instance.ip}
+
+        print(f'{instance.hostname}:{port}: monitoring traffic for {MONITOR_DURATION_SEC}s...')
+        rds = instance.redisConnection(port)
+        applicative_traffic = {}  # ip -> set of commands
+
+        try:
+            monitor = rds.monitor()
+            start = time.time()
+            for event in monitor.listen():
+                if time.time() - start >= MONITOR_DURATION_SEC:
+                    break
+
+                command = event.get('command', '')
+                client_address = event.get('client_address', '')
+
+                if not client_address or not command:
+                    continue
+
+                cmd_name = command.split()[0].lower() if command else ''
+                if cmd_name in MONITOR_IGNORED_COMMANDS:
+                    continue
+
+                client_ip = client_address.split(':')[0]
+                if client_ip in excluded_ips:
+                    continue
+
+                if client_ip not in applicative_traffic:
+                    applicative_traffic[client_ip] = set()
+                applicative_traffic[client_ip].add(cmd_name)
+        except Exception as e:
+            print(f'WARNING: could not run MONITOR on {port}: {e}')
+            continue
+        finally:
+            try:
+                rds.close()
+            except Exception:
+                pass
+
+        if applicative_traffic:
+            print(f'WARNING: slave {instance.hostname}:{port} has applicative traffic:')
+            for ip, cmds in applicative_traffic.items():
+                print(f'  {ip}: {{", ".join(sorted(cmds))}}')
+        else:
+            print(f'{instance.hostname}:{port}: no applicative traffic detected')
+
+
 def disableRedisGears(port):
     """Comment out any loadmodule line for redisgears in the Redis conf file."""
     conf_path = Path(REDIS_CONF_PATH.format(port))
@@ -551,6 +620,10 @@ def main():
     print("\n-- part 2: check if slaves are used by applicative connections --")
 
     slaveUsageInfo(instance)
+
+    print("\n-- part 2b: monitor replica traffic for applicative commands --")
+
+    monitorReplicaTraffic(instance)
     confirmProceed()
 
     print("\n-- part 3: save all data to disk for fast recovery --")
