@@ -55,6 +55,8 @@ def processArgs():
                         help='dry run only, run checks and master/slave switch without upgrading')
     parser.add_argument('--rollback', '-r',
                         help='rollback to a previously backed-up version (e.g. 7.4.6)')
+    parser.add_argument('--port',
+                        help='single-redis mode: only process this port (dry run only)')
     return parser.parse_args()
 
 
@@ -628,6 +630,18 @@ def main():
     instance = common.RedisInstance(
         hostname=common.getLocalhost(), ip=common.getLocalIP(), isLocalhost=True)
     current_version = instance.version
+
+    # single-redis mode: restrict to one port (dry run only)
+    single_port = args.port
+    if single_port:
+        if not dryRun:
+            raise ValidationError('--port can only be used with --dryrun')
+        if single_port not in instance.ports:
+            raise ValidationError(
+                f'port {single_port} not found on this server '
+                f'(available: {", ".join(instance.ports)})')
+        print(f'single-redis mode: only processing port {single_port}')
+        instance.ports = [single_port]
 
     if not dryRun:
         compareVersions(current_version, new_version)
