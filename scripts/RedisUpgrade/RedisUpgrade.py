@@ -113,17 +113,14 @@ def getInstalledBinaryVersion():
 
 
 def compareVersions(current_version, new_version):
-    """Compare current and new versions. Raise if new version is not newer."""
+    """Warn if new version is older than current (downgrade).
+    Same-version check is handled per-port by checkVersionMismatch."""
     def version_tuple(v):
         return tuple(int(x) for x in v.split('.'))
 
     current = version_tuple(current_version)
     new = version_tuple(new_version)
 
-    if new == current:
-        raise ValidationError(
-            f'new version ({new_version}) is the same as the current version ({current_version}). '
-            f'Nothing to upgrade.')
     if new < current:
         print(f'WARNING: new version ({new_version}) is OLDER than current version ({current_version}).')
         print('This is a downgrade, not an upgrade.')
@@ -631,21 +628,38 @@ def main():
     new_version = None
     print("\n-- redis upgrade tool --\n")
 
+    instance = common.RedisInstance(
+        hostname=common.getLocalhost(), ip=common.getLocalIP(), isLocalhost=True)
+
+    # single-redis mode: restrict to one port
+    single_port = args.port
+    if single_port:
+        if single_port not in instance.ports:
+            raise ValidationError(
+                f'port {single_port} not found on this server '
+                f'(available: {", ".join(instance.ports)})')
+        print(f'single-redis mode: only processing port {single_port}')
+        instance.ports = [single_port]
+
+    # get running version from target port(s)
+    current_version = instance.getInfo(instance.ports[0])['redis_version']
+
     # --- Rollback mode ---
     if rollback_version:
         print(f"-- rollback mode: restoring version {rollback_version} --\n")
-        instance = common.RedisInstance(
-            hostname=common.getLocalhost(), ip=common.getLocalIP(), isLocalhost=True)
 
-        print("-- stopping all redises --")
+        print("-- stopping target redises --")
         instance.stopRedisMulti(instance.ports)
         for port in instance.ports:
             print(f'{instance.hostname}:{port} stopped')
 
-        print(f"\n-- rolling back to version {rollback_version} --")
-        rollbackRedisBinaries(rollback_version)
+        installed_version = getInstalledBinaryVersion()
+        if installed_version == rollback_version:
+            print(f'\n-- skipped, binaries on disk are already {rollback_version} --')
+        else:
+            print(f"\n-- rolling back to version {rollback_version} --")
+            rollbackRedisBinaries(rollback_version)
 
-        current_version = instance.version
         for port in instance.ports:
             renameRedisService(port, current_version, rollback_version)
             print(f'{instance.hostname}:{port} service renamed')
@@ -669,20 +683,6 @@ def main():
         checkDirectoryValid(path)
         checkBinariesValid(path)
         new_version = checkBinariesNewVersion(path)
-
-    instance = common.RedisInstance(
-        hostname=common.getLocalhost(), ip=common.getLocalIP(), isLocalhost=True)
-    current_version = instance.version
-
-    # single-redis mode: restrict to one port
-    single_port = args.port
-    if single_port:
-        if single_port not in instance.ports:
-            raise ValidationError(
-                f'port {single_port} not found on this server '
-                f'(available: {", ".join(instance.ports)})')
-        print(f'single-redis mode: only processing port {single_port}')
-        instance.ports = [single_port]
 
     if not dryRun:
         compareVersions(current_version, new_version)
