@@ -56,7 +56,7 @@ def processArgs():
     parser.add_argument('--rollback', '-r',
                         help='rollback to a previously backed-up version (e.g. 7.4.6)')
     parser.add_argument('--port',
-                        help='single-redis mode: only process this port (dry run only)')
+                        help='single-redis mode: only process this port')
     return parser.parse_args()
 
 
@@ -100,6 +100,18 @@ def checkBinariesNewVersion(path):
     return version
 
 
+def getInstalledBinaryVersion():
+    """Get the version of the redis-server binary currently on disk."""
+    binary = Path(RUNNING_BINARIES_PATH) / 'redis-server'
+    if not binary.exists():
+        return None
+    try:
+        output = common.runBash(CHECK_VERSION.format(binary)).splitlines()[0]
+        return output.split()[2].split('=')[1]
+    except Exception:
+        return None
+
+
 def compareVersions(current_version, new_version):
     """Compare current and new versions. Raise if new version is not newer."""
     def version_tuple(v):
@@ -116,6 +128,37 @@ def compareVersions(current_version, new_version):
         print(f'WARNING: new version ({new_version}) is OLDER than current version ({current_version}).')
         print('This is a downgrade, not an upgrade.')
         confirmProceed()
+
+
+def checkVersionMismatch(instance, new_version):
+    """Check each port for version state relative to the target version.
+    Returns (ports_to_upgrade, ports_need_restart, ports_already_done)."""
+    installed_version = getInstalledBinaryVersion()
+    binaries_already_swapped = (installed_version == new_version)
+
+    ports_to_upgrade = []     # binary old, process old -> full upgrade needed
+    ports_need_restart = []   # binary new, process old -> just restart
+    ports_already_done = []   # binary new, process new -> nothing to do
+
+    for port in instance.ports:
+        try:
+            running_version = instance.getInfo(port)['redis_version']
+        except Exception:
+            running_version = 'unknown'
+
+        if running_version == new_version:
+            ports_already_done.append(port)
+            print(f'{instance.hostname}:{port}: already running {new_version}')
+        elif binaries_already_swapped:
+            ports_need_restart.append(port)
+            print(f'WARNING: {instance.hostname}:{port}: binaries on disk are {installed_version} '
+                  f'but running process is {running_version} (restart needed)')
+        else:
+            ports_to_upgrade.append(port)
+            print(f'{instance.hostname}:{port}: running {running_version}, '
+                  f'disk binary is {installed_version}, target is {new_version}')
+
+    return ports_to_upgrade, ports_need_restart, ports_already_done
 
 
 def _copyRedisFiles(srcDir, destDir):
@@ -631,11 +674,9 @@ def main():
         hostname=common.getLocalhost(), ip=common.getLocalIP(), isLocalhost=True)
     current_version = instance.version
 
-    # single-redis mode: restrict to one port (dry run only)
+    # single-redis mode: restrict to one port
     single_port = args.port
     if single_port:
-        if not dryRun:
-            raise ValidationError('--port can only be used with --dryrun')
         if single_port not in instance.ports:
             raise ValidationError(
                 f'port {single_port} not found on this server '
@@ -647,6 +688,16 @@ def main():
         compareVersions(current_version, new_version)
 
     printStaticInfo(current_version, new_version, instance.mode, dryRun)
+
+    # --- version mismatch pre-check ---
+    if not dryRun:
+        print("\n-- pre-check: version mismatch analysis --")
+        ports_to_upgrade, ports_need_restart, ports_already_done = \
+            checkVersionMismatch(instance, new_version)
+
+        if len(ports_already_done) == len(instance.ports):
+            print(f'\nall target ports are already running {new_version}, nothing to do.')
+            return
 
     print("\n-- part 1: ensure all redises on server are slaves --")
 
@@ -676,7 +727,7 @@ def main():
     for port in instance.ports:
         disableRedisGears(port)
 
-    print("\n-- part 5: stop all redises and rename services to new version --")
+    print("\n-- part 5: stop target redises and rename services to new version --")
 
     instance.stopRedisMulti(instance.ports)
 
@@ -684,13 +735,16 @@ def main():
         renameRedisService(port, current_version, new_version)
         print(f'{instance.hostname}:{port} stopped, service renamed')
 
-    print("\n-- part 6: create copy of redis old and new software in /redis/software --")
+    # --- binary swap (skip if already at target version on disk) ---
+    installed_version = getInstalledBinaryVersion()
+    if installed_version == new_version:
+        print(f'\n-- part 6-7: skipped, binaries on disk are already {new_version} --')
+    else:
+        print("\n-- part 6: create copy of redis old and new software in /redis/software --")
+        backupRedisBinaries(path, current_version, new_version)
 
-    backupRedisBinaries(path, current_version, new_version)
-
-    print("\n-- part 7: switch new redis software instead of old software (upgrade step) --")
-
-    switchRedisBinaries(path)
+        print("\n-- part 7: switch new redis software instead of old software (upgrade step) --")
+        switchRedisBinaries(path)
 
     print("\n-- part 8: start redis back up and check validity --")
 
