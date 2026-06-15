@@ -57,6 +57,8 @@ def processArgs():
                         help='rollback to a previously backed-up version (e.g. 7.4.6)')
     parser.add_argument('--port',
                         help='single-redis mode: only process this port')
+    parser.add_argument('--softwareonly', '-so', action='store_true',
+                        help='only swap binaries on disk, do not touch running redis instances')
     return parser.parse_args()
 
 
@@ -658,8 +660,45 @@ def main():
     dryRun = args.dryrun
     path = args.path
     rollback_version = args.rollback
+    softwareOnly = args.softwareonly
     new_version = None
     print("\n-- redis upgrade tool --\n")
+
+    # --- Software-only mode ---
+    if softwareOnly:
+        if dryRun:
+            raise ValidationError('--softwareonly cannot be combined with --dryrun')
+
+        if rollback_version:
+            print(f'-- software-only rollback: restoring binaries to {rollback_version} --\n')
+            rollbackRedisBinaries(rollback_version)
+            print(f'binaries on disk restored to {rollback_version}')
+            print('NOTE: running redis instances are NOT affected until restarted')
+            return
+
+        if not path:
+            raise ValidationError(
+                '--path is required for software-only upgrade')
+        checkDirectoryValid(path)
+        checkBinariesValid(path)
+        new_version = checkBinariesNewVersion(path)
+        current_version = getInstalledBinaryVersion()
+
+        if current_version == new_version:
+            print(f'binaries on disk are already {new_version}, nothing to do.')
+            return
+
+        print(f'-- software-only upgrade: {current_version} -> {new_version} --\n')
+
+        print('-- backing up current binaries --')
+        backupRedisBinaries(path, current_version, new_version)
+
+        print('\n-- switching binaries to new version --')
+        switchRedisBinaries(path)
+
+        print(f'\nbinaries on disk upgraded to {new_version}')
+        print('NOTE: running redis instances are NOT affected until restarted')
+        return
 
     instance = common.RedisInstance(
         hostname=common.getLocalhost(), ip=common.getLocalIP(), isLocalhost=True)
