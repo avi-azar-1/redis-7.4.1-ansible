@@ -401,9 +401,12 @@ def handleMasterFailovers(instance):
             print(f'{instance.hostname}:{port}: replicas fully synced')
 
             # trigger failover
-            result = str(instance.failoverRedis(port))
+            raw_result = instance.failoverRedis(port)
+            if isinstance(raw_result, bytes):
+                raw_result = raw_result.decode()
+            result = str(raw_result).strip().lower()
             print(f'{instance.hostname}:{port}: failover returned: {result}')
-            if result not in ('ok', 'True', True):
+            if result not in ('ok', 'true'):
                 try:
                     rds.execute_command('CLIENT UNPAUSE')
                 except Exception:
