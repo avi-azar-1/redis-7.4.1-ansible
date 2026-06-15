@@ -593,6 +593,27 @@ def disableRedisGears(port):
         print(f'{port}: no active redisgears loadmodule found in {conf_path}')
 
 
+def checkServicePaths(instance):
+    """Pre-check: warn if any service file uses a non-standard binary path."""
+    mismatched = []
+    for port in instance.ports:
+        service = common.REDIS_SERVICE.format(port)
+        service_path = Path(SERVICE_LOCATION.format(service))
+        if not service_path.exists():
+            continue
+        content = service_path.read_text()
+        match = re.search(r'^ExecStart=(.+?)/redis-server\s', content, re.MULTILINE)
+        if match:
+            actual_path = match.group(1)
+            if actual_path != RUNNING_BINARIES_PATH:
+                mismatched.append((port, actual_path))
+    if mismatched:
+        print('WARNING: the following services use non-standard binary paths:')
+        for port, path in mismatched:
+            print(f'  port {port}: {path} (expected {RUNNING_BINARIES_PATH})')
+        print('these will be normalized to the standard path during upgrade')
+
+
 def renameRedisService(port, current_version, new_version):
     service = common.REDIS_SERVICE.format(port)
     service_path = Path(SERVICE_LOCATION.format(service))
@@ -603,8 +624,17 @@ def renameRedisService(port, current_version, new_version):
 
     content = service_path.read_text()
 
-    # Replace explicit occurrences of current_version with new_version
-    content = content.replace(current_version, new_version)
+    # Normalize ExecStart to use standard binary path
+    content = re.sub(
+        r'^(ExecStart=).+/(redis-server\s)',
+        rf'\1{RUNNING_BINARIES_PATH}/\2',
+        content, flags=re.MULTILINE)
+
+    # Normalize ExecStop to use standard binary path
+    content = re.sub(
+        r'^(ExecStop=).+/(redis-cli\s)',
+        rf'\1{RUNNING_BINARIES_PATH}/\2',
+        content, flags=re.MULTILINE)
 
     # Ensure Description is updated correctly regardless of previous value
     content = re.sub(r'^Description=Redis.*$', f'Description=Redis {new_version}', content, flags=re.MULTILINE)
@@ -688,6 +718,10 @@ def main():
         compareVersions(current_version, new_version)
 
     printStaticInfo(current_version, new_version, instance.mode, dryRun)
+
+    # --- service path pre-check ---
+    print("\n-- pre-check: service file binary paths --")
+    checkServicePaths(instance)
 
     # --- version mismatch pre-check ---
     if not dryRun:
